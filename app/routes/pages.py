@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -51,20 +53,45 @@ def stats_page(code: str, request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/{code}", include_in_schema=False)
-def follow(code: str, request: Request, db: Session = Depends(get_db)):
-    """The hot path. Keep it cheap — one indexed lookup, one insert."""
-    link = crud.get_link_by_code(db, code)
+def follow(
+    code: str,
+    request: Request,
+    background: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """The hot path.
+
+    Two deliberate choices:
+
+    1. Resolution goes through the cache, so a hot link never touches the DB.
+    2. The click is recorded *after* the response is sent. Analytics are not
+       worth making the user wait for, and a failed insert should not turn a
+       working redirect into a 500.
+    """
+    link = crud.resolve(db, code)
     if link is None:
         raise HTTPException(status_code=404, detail="No such link.")
-    if link.is_expired:
+
+    if _expired(link["expires_at"]):
         raise HTTPException(status_code=410, detail="This link has expired.")
 
-    crud.record_click(
-        db,
-        link,
-        referrer=request.headers.get("referer"),
-        user_agent=request.headers.get("user-agent"),
-    )
+    referrer = request.headers.get("referer")
+    user_agent = request.headers.get("user-agent")
+
+    if settings.click_mode == "sync":
+        crud.record_click_by_id(link["id"], referrer, user_agent)
+    else:
+        background.add_task(crud.record_click_by_id, link["id"], referrer, user_agent)
+
     # 307 not 301: browsers cache permanent redirects, which would silently
     # kill your click tracking on repeat visits.
-    return RedirectResponse(link.target_url, status_code=307)
+    return RedirectResponse(link["target_url"], status_code=307)
+
+
+def _expired(expires_at: str | None) -> bool:
+    if not expires_at:
+        return False
+    parsed = datetime.fromisoformat(expires_at)
+    if parsed.tzinfo is None:  # SQLite hands back naive datetimes
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed < datetime.now(timezone.utc)

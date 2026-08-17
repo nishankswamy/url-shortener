@@ -84,3 +84,40 @@ def test_pages_render(client):
     assert client.get("/").status_code == 200
     assert client.get(f"/s/{code}").status_code == 200
     assert client.get("/health").json() == {"status": "ok"}
+
+
+# --- codes -----------------------------------------------------------------
+
+
+def test_generated_codes_are_not_sequential(client):
+    """Two links created back to back must not produce adjacent codes."""
+    first = create(client, "https://example.com/1").json()["short_code"]
+    second = create(client, "https://example.com/2").json()["short_code"]
+    assert first[:3] != second[:3]
+    assert len(first) == len(second) == 6
+
+
+# --- qr codes --------------------------------------------------------------
+
+
+def test_qr_returns_a_png(client):
+    code = create(client).json()["short_code"]
+    response = client.get(f"/api/links/{code}/qr.png")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.content[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_qr_404s_for_unknown_code(client):
+    assert client.get("/api/links/nope/qr.png").status_code == 404
+
+
+# --- click recording -------------------------------------------------------
+
+
+def test_click_recorded_when_written_in_background(client):
+    """TestClient runs background tasks before returning, so this covers the
+    shipped code path rather than only the sync one."""
+    code = create(client).json()["short_code"]
+    client.get(f"/{code}")
+    assert client.get(f"/api/links/{code}/stats").json()["total_clicks"] == 1

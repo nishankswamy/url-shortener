@@ -1,17 +1,33 @@
-"""Base62 encoding.
+"""Short code generation.
 
-Codes are derived from the row's auto-increment id rather than random bytes,
-which means collisions are impossible by construction — no retry loop, no
-uniqueness check on the hot path.
+Codes are derived from the row's auto-increment id, never from random bytes.
+That makes collisions impossible by construction — no retry loop, no uniqueness
+check on the hot path.
 
-The trade-off: codes are sequential, so anyone can enumerate your links.
-Fine for a demo, not for anything private. See the note at the bottom for
-the fix if you want unguessable codes.
+The naive version (`encode(id)`) is enumerable: given `q0W`, anyone can walk
+your entire link table. The fix is not randomness — that reintroduces
+collisions — but a *bijection* over the code space. Multiply the id by a
+constant coprime with the modulus and the mapping stays one-to-one while the
+output stops looking sequential:
+
+    1 -> Nk9pTx    2 -> 1V8Fnv    3 -> 2CxWHt
+
+Both modes are kept so the tradeoff stays visible. See SHORTCODE_MODE.
 """
 
 ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 BASE = len(ALPHABET)
 _INDEX = {char: i for i, char in enumerate(ALPHABET)}
+
+# Six base62 characters ≈ 56.8 billion codes. Enough that you will never
+# exhaust it, small enough that the codes stay short.
+CODE_LENGTH = 6
+MODULUS = BASE**CODE_LENGTH
+
+# Any constant coprime with MODULUS gives a bijection. MODULUS factors as
+# 2^6 * 31^6, so an odd prime that isn't 31 qualifies. This one is prime.
+MULTIPLIER = 1_580_030_173
+_INVERSE = pow(MULTIPLIER, -1, MODULUS)
 
 
 def encode(number: int) -> str:
@@ -38,10 +54,19 @@ def decode(code: str) -> int:
     return number
 
 
-# Stretch goal: make codes unguessable.
-#
-# Multiply the id by a large odd number coprime with 62**n and mask it
-# (a Feistel network or simple multiplicative inverse over the id space).
-# You keep collision-freedom because the mapping stays bijective, but the
-# output no longer looks sequential. Implement `obfuscate(id)` /
-# `deobfuscate(code)` here and the rest of the app doesn't change.
+def obfuscate(number: int) -> str:
+    """Map an id to a fixed-length code that doesn't reveal its position.
+
+    Still bijective, so still collision-free. Note this is obfuscation, not
+    encryption — the multiplier is in the source. It stops casual enumeration,
+    it does not make a link secret. Anything that needs to stay private needs
+    real authorisation on the redirect.
+    """
+    if not 0 <= number < MODULUS:
+        raise ValueError(f"id {number} outside the {CODE_LENGTH}-character code space")
+    return encode(number * MULTIPLIER % MODULUS).rjust(CODE_LENGTH, ALPHABET[0])
+
+
+def deobfuscate(code: str) -> int:
+    """Recover the id from an obfuscated code."""
+    return decode(code) * _INVERSE % MODULUS

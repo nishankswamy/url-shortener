@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from . import models, shortcode
+from . import cache, models, shortcode
 from .config import settings
 
 
@@ -40,7 +40,10 @@ def create_link(
     db.flush()  # assigns link.id without committing
 
     if not custom_alias:
-        link.short_code = shortcode.encode(link.id + settings.id_offset)
+        if settings.shortcode_mode == "sequential":
+            link.short_code = shortcode.encode(link.id + settings.id_offset)
+        else:
+            link.short_code = shortcode.obfuscate(link.id)
 
     db.commit()
     db.refresh(link)
@@ -117,3 +120,45 @@ def _clean_referrer(referrer: str | None) -> str | None:
 
     host = urlparse(referrer).netloc
     return host or None
+
+
+def resolve(db: Session, code: str) -> dict | None:
+    """Look up a code for the redirect path, cache first.
+
+    Returns a plain dict rather than a Link so the cached and uncached paths
+    have the same shape — otherwise callers end up branching on which one
+    they got, which is how cache bugs start.
+    """
+    cached = cache.get_link(code)
+    if cached is not None:
+        return cached
+
+    link = get_link_by_code(db, code)
+    if link is None:
+        return None
+
+    cache.set_link(code, link.id, link.target_url, link.expires_at)
+    return {
+        "id": link.id,
+        "target_url": link.target_url,
+        "expires_at": link.expires_at.isoformat() if link.expires_at else None,
+    }
+
+
+def record_click_by_id(link_id: int, referrer: str | None, user_agent: str | None) -> None:
+    """Write a click using its own session.
+
+    Called from a background task, after the response has been sent, so it
+    cannot reuse the request's session — that one is already closed.
+    """
+    from .database import SessionLocal
+
+    with SessionLocal() as db:
+        db.add(
+            models.Click(
+                link_id=link_id,
+                referrer=_clean_referrer(referrer),
+                user_agent=user_agent,
+            )
+        )
+        db.commit()

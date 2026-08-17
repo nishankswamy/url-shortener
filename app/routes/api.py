@@ -1,4 +1,7 @@
+import io
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from .. import crud, schemas
@@ -52,4 +55,23 @@ def link_stats(code: str, db: Session = Depends(get_db)):
         total_clicks=total,
         clicks_by_day=crud.clicks_by_day(db, link.id),
         top_referrers=crud.top_referrers(db, link.id),
+    )
+
+
+@router.get("/links/{code}/qr.png", response_class=Response, responses={200: {"content": {"image/png": {}}}})
+def link_qr(code: str, db: Session = Depends(get_db)):
+    """QR for the short URL. Generated on the fly — it's a few ms and the
+    result is fully determined by the code, so let the CDN cache it."""
+    import qrcode
+
+    if crud.get_link_by_code(db, code) is None:
+        raise HTTPException(status_code=404, detail="No such link.")
+
+    img = qrcode.make(f"{settings.base_url}/{code}", box_size=8, border=2)
+    buffer = io.BytesIO()
+    img.save(buffer, format="PNG")
+    return Response(
+        buffer.getvalue(),
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
     )

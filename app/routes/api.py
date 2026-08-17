@@ -1,10 +1,11 @@
 import io
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from .. import crud, schemas
+from ..auth import require_key
 from ..config import settings
 from ..database import get_db
 
@@ -22,7 +23,12 @@ def _to_out(link, click_count: int) -> schemas.LinkOut:
     )
 
 
-@router.post("/links", response_model=schemas.LinkOut, status_code=201)
+@router.post(
+    "/links",
+    response_model=schemas.LinkOut,
+    status_code=201,
+    dependencies=[Depends(require_key)],
+)
 def create_link(payload: schemas.LinkCreate, db: Session = Depends(get_db)):
     try:
         link = crud.create_link(
@@ -38,23 +44,36 @@ def create_link(payload: schemas.LinkCreate, db: Session = Depends(get_db)):
     return _to_out(link, 0)
 
 
-@router.get("/links", response_model=list[schemas.LinkOut])
+@router.get(
+    "/links",
+    response_model=list[schemas.LinkOut],
+    dependencies=[Depends(require_key)],
+)
 def list_links(db: Session = Depends(get_db)):
     return [_to_out(link, count) for link, count in crud.list_links(db)]
 
 
-@router.get("/links/{code}/stats", response_model=schemas.LinkStats)
-def link_stats(code: str, db: Session = Depends(get_db)):
+@router.get(
+    "/links/{code}/stats",
+    response_model=schemas.LinkStats,
+    dependencies=[Depends(require_key)],
+)
+def link_stats(
+    code: str,
+    include_bots: bool = Query(default=False, description="Count crawler traffic too."),
+    db: Session = Depends(get_db),
+):
     link = crud.get_link_by_code(db, code)
     if link is None:
         raise HTTPException(status_code=404, detail="No such link.")
 
-    total = crud.count_clicks(db, link.id)
+    total = crud.count_clicks(db, link.id, include_bots=include_bots)
     return schemas.LinkStats(
         link=_to_out(link, total),
         total_clicks=total,
-        clicks_by_day=crud.clicks_by_day(db, link.id),
-        top_referrers=crud.top_referrers(db, link.id),
+        bot_clicks=crud.count_bot_clicks(db, link.id),
+        clicks_by_day=crud.clicks_by_day(db, link.id, include_bots=include_bots),
+        top_referrers=crud.top_referrers(db, link.id, include_bots=include_bots),
     )
 
 

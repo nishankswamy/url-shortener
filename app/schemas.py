@@ -45,5 +45,6 @@ class NamedCount(BaseModel):
 class LinkStats(BaseModel):
     link: LinkOut
     total_clicks: int
+    bot_clicks: int
     clicks_by_day: list[TimePoint]
     top_referrers: list[NamedCount]

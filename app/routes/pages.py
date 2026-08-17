@@ -5,7 +5,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
-from .. import crud
+from .. import clickbuffer, crud
 from ..config import settings
 from ..database import get_db
 
@@ -31,7 +31,15 @@ def home(request: Request, db: Session = Depends(get_db)):
 
 @router.get("/health", include_in_schema=False)
 def health():
-    return {"status": "ok"}
+    """Reports which protections are live, so a deploy that forgot to set
+    API_KEYS is visible rather than silently open."""
+    return {
+        "status": "ok",
+        "auth": "enabled" if settings.api_keys else "open",
+        "cache": "enabled" if settings.redis_url else "disabled",
+        "click_buffer": "on" if settings.click_buffer else "off",
+        "pending_clicks": clickbuffer.pending(),
+    }
 
 
 @router.get("/s/{code}", include_in_schema=False)
@@ -46,6 +54,7 @@ def stats_page(code: str, request: Request, db: Session = Depends(get_db)):
             "link": link,
             "short_url": f"{settings.base_url}/{link.short_code}",
             "total": crud.count_clicks(db, link.id),
+            "bot_clicks": crud.count_bot_clicks(db, link.id),
             "by_day": crud.clicks_by_day(db, link.id),
             "referrers": crud.top_referrers(db, link.id),
         },
@@ -79,9 +88,9 @@ def follow(
     user_agent = request.headers.get("user-agent")
 
     if settings.click_mode == "sync":
-        crud.record_click_by_id(link["id"], referrer, user_agent)
+        clickbuffer.enqueue(link["id"], referrer, user_agent)
     else:
-        background.add_task(crud.record_click_by_id, link["id"], referrer, user_agent)
+        background.add_task(clickbuffer.enqueue, link["id"], referrer, user_agent)
 
     # 307 not 301: browsers cache permanent redirects, which would silently
     # kill your click tracking on repeat visits.

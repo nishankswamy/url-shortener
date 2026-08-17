@@ -10,4 +10,8 @@ fi
 [ -f .env ] || cp .env.example .env
 
 set -a; . ./.env; set +a
+
+echo "→ running migrations"
+./.venv/bin/alembic upgrade head
+
 exec ./.venv/bin/uvicorn app.main:app --reload --port 8000

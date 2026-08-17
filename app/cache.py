@@ -70,7 +70,7 @@ def set_link(code: str, link_id: int, target_url: str, expires_at) -> None:
         "expires_at": expires_at.isoformat() if expires_at else None,
     }
     try:
-        client.setex(f"link:{code}", settings.cache_ttl, json.dumps(payload))
+        client.set(f"link:{code}", json.dumps(payload), ex=settings.cache_ttl)
     except Exception as exc:  # noqa: BLE001
         log.warning("cache write failed for %s: %s", code, exc)
 

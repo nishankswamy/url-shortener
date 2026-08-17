@@ -7,7 +7,10 @@
 
 <div class="panel">
   <div class="stat">{{ total }}</div>
-  <div style="color:var(--muted)">total clicks</div>
+  <div style="color:var(--muted)">
+    human clicks
+    {% if bot_clicks %}&middot; {{ bot_clicks }} bot clicks excluded{% endif %}
+  </div>
 </div>
 
 <h2>Last 30 days</h2>

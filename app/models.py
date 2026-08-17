@@ -42,6 +42,8 @@ class Click(Base):
     clicked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     referrer: Mapped[str | None] = mapped_column(Text, nullable=True)
     user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Labelled at write time, never filtered at write time — see app/bots.py.
+    is_bot: Mapped[bool] = mapped_column(default=False, index=True)
 
     link: Mapped[Link] = relationship(back_populates="clicks")
 

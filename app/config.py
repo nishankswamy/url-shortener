@@ -24,6 +24,16 @@ class Settings:
         self.redis_url = os.getenv("REDIS_URL", "")
         self.cache_ttl = int(os.getenv("CACHE_TTL", "3600"))
 
+        # Comma-separated keys guarding link creation and analytics.
+        # Empty means open mode — fine locally, never in production.
+        self.api_keys = [k.strip() for k in os.getenv("API_KEYS", "").split(",") if k.strip()]
+
+        # Buffer clicks in Redis and flush in batches instead of one INSERT
+        # per redirect. Requires REDIS_URL; falls back to direct writes.
+        self.click_buffer = os.getenv("CLICK_BUFFER", "off") == "on"
+        self.flush_interval = float(os.getenv("FLUSH_INTERVAL", "5"))
+        self.flush_batch_size = int(os.getenv("FLUSH_BATCH_SIZE", "500"))
+
         # Reserved paths that can never be used as a custom alias.
         self.reserved = {"api", "static", "docs", "redoc", "openapi.json", "s", "health"}
 

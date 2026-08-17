@@ -21,7 +21,28 @@ from app.main import app  # noqa: E402
 def clean_db():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+
+    # Codes are derived from row ids, and dropping the tables resets the
+    # sequence — so test 2 gets the same code test 1 had. Without clearing
+    # Redis between tests, a stale entry serves the previous test's target.
+    #
+    # Worth noting this isn't purely a test concern: restoring a database from
+    # a backup resets ids the same way, and would serve stale targets to real
+    # users until the TTL expired.
+    _clear_cache()
     yield
+    _clear_cache()
+
+
+def _clear_cache():
+    from app import cache
+
+    cache.reset()
+    client = cache._get_client()
+    if client is not None:
+        for key in client.scan_iter("link:*"):
+            client.delete(key)
+        client.delete("clicks:pending")
 
 
 @pytest.fixture

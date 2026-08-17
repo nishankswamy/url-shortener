@@ -7,9 +7,9 @@ Short links with click analytics. Day 1 of a 30-day build challenge.
 ## Run it
 
 ```bash
-./run.sh                    # creates .venv, installs deps, starts on :8000
+./run.sh                    # venv, deps, migrations, then serves on :8000
 python seed.py              # optional: 5 links and ~1,400 backdated clicks
-.venv/bin/pytest            # 34 tests
+.venv/bin/pytest            # 66 tests (71 with a Redis available)
 ```
 
 Open http://localhost:8000. API docs at `/docs`.
@@ -25,6 +25,10 @@ Open http://localhost:8000. API docs at `/docs`.
 | `GET /api/links` | List with click counts |
 | `GET /api/links/{code}/stats` | Full stats payload |
 | `GET /api/links/{code}/qr.png` | QR code for the short URL |
+| `GET /health` | Status plus which protections are actually live |
+
+Everything except the redirect and `/health` sits behind `X-API-Key` once
+`API_KEYS` is set.
 
 ## Design decisions
 
@@ -62,6 +66,32 @@ repeat visits, and the analytics would look plausible while being wrong.
 
 See the benchmark below. `REDIS_URL` is empty by default and the app runs fine
 without Redis — every cache failure path falls through to the database.
+
+### Bot clicks are labelled, not discarded
+
+A link posted to Slack gets a click from Slackbot before any human sees it.
+Crawlers, link previewers and uptime monitors all inflate the numbers, so
+`app/bots.py` classifies the user agent at write time and analytics exclude
+bots by default — `?include_bots=true` opts back in.
+
+Two deliberate limits. It's a user-agent check, which catches honest bots that
+identify themselves and misses anyone spoofing a browser; that's the right
+trade for analytics, where the goal is removing the obvious noise floor rather
+than adversarial defence. And the rows are kept either way — `is_bot` is a
+label, not a filter. Discarding them would make the decision irreversible, and
+you can't re-derive what you didn't store.
+
+A missing user agent counts as a bot. Every real browser sends one.
+
+### Auth guards writes and analytics, never redirects
+
+API keys in `API_KEYS`, compared with `hmac.compare_digest`. Empty means open
+mode, which is right locally and wrong in production — so `/health` reports
+which mode is live, making a deploy that forgot to set keys visible instead of
+silently public.
+
+There are no accounts, so every key sees every link. Per-user ownership is a
+schema change, not an auth change.
 
 ### Click counts come from one grouped query
 
@@ -101,14 +131,38 @@ The direction **flips between runs** — the difference is inside run-to-run
 variance. Moving the click write off the response path is not a measurable win at
 this scale, with one serial client and a local SQLite file.
 
-Both optimisations are kept, both are off or neutral by default, and both are bets
-on a deployment that doesn't exist yet: a remote Postgres and concurrent traffic.
+Both optimisations are kept, both are off by default, and both are bets on a
+deployment that doesn't exist yet: a remote Postgres and concurrent traffic.
 That's a defensible reason to keep code. "It felt faster" is not.
+
+`CLICK_BUFFER=on` goes further and batches writes through a Redis list, turning
+N inserts into N/500. The trade is durability — clicks sitting in the buffer
+when the process dies are gone. Acceptable for analytics, unacceptable for
+anything billable, and better stated up front than discovered later. The flush
+pops before inserting, so a crash mid-flush under-counts rather than
+double-counts; the reverse choice needs an idempotency key on every click.
 
 The measurement discipline mattered more than the result. The first version of
 `bench.py` reported a **678x speedup** — it was timing the cache's own
 graceful-degradation path, which returns `None` in nanoseconds when Redis is
 unreachable. `bench.py` now asserts a real cache hit before timing anything.
+
+## Migrations
+
+Alembic, not `create_all`. `run.sh` and the Dockerfile both run `alembic upgrade
+head` before serving — if the migration fails the container fails, which beats
+one serving against the wrong schema.
+
+Autogenerate is a starting point, not an answer. The `is_bot` migration it
+produced passed on an empty database and would have failed on any real one:
+
+```
+sqlite3.OperationalError: Cannot add a NOT NULL column with default value NULL
+```
+
+A NOT NULL column added to a populated table needs a server-side default.
+`tests/test_migrations.py` now migrates a database that has rows in it, which is
+the only version of that test worth having.
 
 ## Layout
 
@@ -119,15 +173,19 @@ app/
   models.py      Link, Click
   schemas.py     request/response validation
   shortcode.py   base62 + the id->code bijection
+  bots.py        user-agent classification
+  auth.py        API key dependency
   cache.py       Redis with graceful degradation
+  clickbuffer.py batched click writes
   crud.py        all DB access
   routes/
     api.py       JSON API
     pages.py     HTML pages + the redirect handler
+migrations/      alembic
 bench.py         lookup micro-benchmark
 bench_http.py    end-to-end redirect benchmark
 seed.py          demo data
-tests/           34 tests
+tests/           66 tests, plus 5 that need Redis
 ```
 
 ## Config
@@ -137,8 +195,12 @@ tests/           34 tests
 | `DATABASE_URL` | `sqlite:///./shortener.db` | Postgres works unchanged |
 | `BASE_URL` | `http://localhost:8000` | Used to build short URLs |
 | `SHORTCODE_MODE` | `obfuscated` | or `sequential` |
+| `API_KEYS` | *(empty)* | Comma separated; empty means open mode |
 | `REDIS_URL` | *(empty)* | Empty disables the cache |
 | `CACHE_TTL` | `3600` | Seconds |
+| `CLICK_BUFFER` | `off` | `on` batches click writes through Redis |
+| `FLUSH_INTERVAL` | `5` | Seconds between flushes |
+| `FLUSH_BATCH_SIZE` | `500` | Rows per flush |
 | `CLICK_MODE` | `background` | or `sync`; exists so the benchmark is reproducible |
 
 ## Deploy
@@ -152,8 +214,11 @@ else changes.
 
 ## Known gaps
 
-- `Base.metadata.create_all` instead of Alembic migrations
-- No auth — anyone can create links and read anyone's analytics
-- Click writes go straight to Postgres; at real volume they should be buffered
-  in Redis and flushed in batches
-- No bot filtering, so the click counts include crawlers
+- No user accounts, so every API key sees every link
+- Bot detection is user-agent only and trivially spoofed
+- Buffered clicks are lost if the process dies
+- The cache is keyed on short code, and short codes are derived from row ids —
+  restoring the database from a backup resets those ids and would serve stale
+  targets until the TTL expired. Flush the cache on restore, or key on
+  something stable.
+- No rate limiting on link creation

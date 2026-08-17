@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}{{ link.short_code }} — stats{% endblock %}
+{% block content %}
+<a class="back" href="/">&larr; all links</a>
+<h1><code>{{ link.short_code }}</code></h1>
+<p class="sub">{{ short_url }} &rarr; <a href="{{ link.target_url }}">{{ link.target_url }}</a></p>
+
+<div class="panel">
+  <div class="stat">{{ total }}</div>
+  <div style="color:var(--muted)">total clicks</div>
+</div>
+
+<h2>Last 30 days</h2>
+<div class="panel"><canvas id="chart" height="90"></canvas></div>
+
+<h2>Referrers</h2>
+<div class="panel">
+  {% if referrers %}
+  <table>
+    <thead><tr><th>Source</th><th class="num">Clicks</th></tr></thead>
+    <tbody>
+      {% for r in referrers %}
+      <tr><td>{{ r.name }}</td><td class="num">{{ r.clicks }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No clicks recorded yet.</p>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+const points = {{ by_day | tojson }};
+new Chart(document.getElementById('chart'), {
+  type: 'line',
+  data: {
+    labels: points.map(p => p.date.slice(5)),
+    datasets: [{
+      data: points.map(p => p.clicks),
+      borderColor: '#6c8cff',
+      backgroundColor: 'rgba(108,140,255,.15)',
+      fill: true,
+      tension: .3,
+      pointRadius: 0,
+      borderWidth: 2,
+    }],
+  },
+  options: {
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { grid: { display: false }, ticks: { color: '#8b90a3', maxTicksLimit: 8 } },
+      y: { beginAtZero: true, grid: { color: '#262938' }, ticks: { color: '#8b90a3', precision: 0 } },
+    },
+  },
+});
+</script>
+{% endblock %}

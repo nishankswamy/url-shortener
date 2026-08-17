@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Shortener</h1>
+<p class="sub">Short links with click analytics.</p>
+
+<div class="panel">
+  <form id="create">
+    <input name="url" type="url" placeholder="https://example.com/a/very/long/url" required>
+    <input name="alias" class="alias" placeholder="custom-alias (optional)">
+    <button type="submit">Shorten</button>
+  </form>
+  <div class="msg" id="msg"></div>
+</div>
+
+<h2>Links</h2>
+<div class="panel">
+  {% if links %}
+  <table>
+    <thead>
+      <tr><th>Code</th><th>Target</th><th class="num">Clicks</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for l in links %}
+      <tr>
+        <td>
+          <a href="/{{ l.short_code }}"><code>{{ l.short_code }}</code></a>
+          {% if l.expired %}<span class="pill">expired</span>{% endif %}
+        </td>
+        <td class="target" title="{{ l.target_url }}">{{ l.target_url }}</td>
+        <td class="num">{{ l.clicks }}</td>
+        <td class="num"><a href="/s/{{ l.short_code }}">stats</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No links yet. Create one above.</p>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const form = document.getElementById('create');
+const msg = document.getElementById('msg');
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const button = form.querySelector('button');
+  button.disabled = true;
+  msg.className = 'msg';
+  msg.textContent = 'Creating…';
+
+  const body = { target_url: form.url.value };
+  if (form.alias.value.trim()) body.custom_alias = form.alias.value.trim();
+
+  try {
+    const res = await fetch('/api/links', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Something went wrong.');
+    msg.textContent = 'Created — reloading…';
+    location.reload();
+  } catch (err) {
+    msg.className = 'msg err';
+    msg.textContent = err.message;
+    button.disabled = false;
+  }
+});
+</script>
+{% endblock %}
